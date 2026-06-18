@@ -1,0 +1,14 @@
+nombre,categoria,precio,duracion_min,descripcion
+Alisado Brasileño Corto,Alisados,85,120,Ideal para pelo corto. Resultado natural sin encrespamiento.
+Alisado Brasileño Medio,Alisados,100,150,Para melenas medias. Efecto liso duradero con keratina.
+Alisado Brasileño Largo,Alisados,120,180,Para melenas largas. Tratamiento premium con keratina.
+Alisado Japonés Corto,Alisados,150,180,Alisado permanente. Resultado extremadamente liso.
+Alisado Japonés Largo,Alisados,190,240,Alisado permanente para melenas largas. Efecto espejo.
+Corte de Puntas,Cortes,25,30,Corte básico de puntas abiertas.
+Corte Mujer,Cortes,40,60,Corte personalizado según tipo de rostro.
+Corte Hombre,Cortes,20,30,Corte clásico o moderno.
+Lavado y Peinado,Peinados,30,45,Lavado + secado + peinado profesional.
+Moldeador,Peinados,25,30,Peinado con plancha o rulos.
+Color sin Amoniaco,Tintes,55,90,Coloración respetuosa con el cabello.
+Mechas Parciales,Tintes,70,120,Mechas en la parte superior.
+Mechas Completas,Tintes,95,150,Mechas en toda la cabeza.
