@@ -1,0 +1,139 @@
+{
+  "name": "WinoWin - Confirmación de Cita",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "confirmacion-cita",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook (Chatbot → n8n)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "winowin-confirmacion-cita"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "¡Hola {{ $json.name }}! 👋 Tu cita para *{{ $json.service }}* ha sido confirmada. 📅 Fecha: *{{ $json.date }}* a las *{{ $json.time }}*. ¡Te esperamos en WinoWin! 💇‍♀️✨"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "build-message",
+      "name": "Construir mensaje",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v22.0/{{$env.WHATSAPP_PHONE_NUMBER_ID}}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.WHATSAPP_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"preview_url\": false,\n    \"body\": \"{{ $json.message }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "send-whatsapp",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": true,\n  \"message\": \"Confirmación enviada a {{ $('Webhook (Chatbot → n8n)').item.json.name }}\"\n}",
+        "options": {}
+      },
+      "id": "response",
+      "name": "Responder al chatbot",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Webhook (Chatbot → n8n)": {
+      "main": [
+        [
+          {
+            "node": "Construir mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir mensaje": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Responder al chatbot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "active": false,
+  "settings": {
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "winowin",
+      "id": "1"
+    },
+    {
+      "name": "whatsapp",
+      "id": "2"
+    }
+  ],
+  "staticData": null,
+  "meta": {
+    "templateId": "n8n-nodes-base.webhook",
+    "templateCredsSetupCompleted": false,
+    "instanceSettings": {
+      "isMultiMain": false
+    }
+  },
+  "id": "winowin-confirmacion-cita",
+  "createdAt": "2026-06-19T00:00:00.000Z",
+  "updatedAt": "2026-06-19T00:00:00.000Z",
+  "description": "Webhook que recibe los datos de una cita confirmada desde el chatbot y envía un mensaje de confirmación por WhatsApp al cliente. Recibe: {phone, name, service, date, time}"
+}

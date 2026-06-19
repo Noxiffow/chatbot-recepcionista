@@ -1,0 +1,234 @@
+{
+  "name": "WinoWin - Recordatorio 24h",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Cada hora",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{$env.CHATBOT_URL}}/api/appointments/pending-reminders",
+        "authentication": "none",
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {}
+      },
+      "id": "fetch-pending",
+      "name": "Consultar citas pendientes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "count-check",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-count",
+      "name": "¿Hay citas pendientes?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Procesar una por una",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1.1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "¡Hola {{ $json.name }}! 👋 Te recordamos que *mañana* a las *{{ $json.time }}* tienes tu cita para *{{ $json.service }}*. ¡Te esperamos en WinoWin! 💇‍♀️✨"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "build-message",
+      "name": "Construir mensaje recordatorio",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v22.0/{{$env.WHATSAPP_PHONE_NUMBER_ID}}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.WHATSAPP_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"preview_url\": false,\n    \"body\": \"{{ $json.message }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "send-whatsapp",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{$env.CHATBOT_URL}}/api/appointments/{{ $json.id }}/mark-reminded",
+        "authentication": "none",
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {}
+      },
+      "id": "mark-reminded",
+      "name": "Marcar como recordada",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 300]
+    }
+  ],
+  "connections": {
+    "Cada hora": {
+      "main": [
+        [
+          {
+            "node": "Consultar citas pendientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar citas pendientes": {
+      "main": [
+        [
+          {
+            "node": "¿Hay citas pendientes?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay citas pendientes?": {
+      "main": [
+        [
+          {
+            "node": "Procesar una por una",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Procesar una por una": {
+      "main": [
+        [
+          {
+            "node": "Construir mensaje recordatorio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir mensaje recordatorio": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Marcar como recordada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "active": false,
+  "settings": {
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "winowin",
+      "id": "1"
+    },
+    {
+      "name": "whatsapp",
+      "id": "2"
+    }
+  ],
+  "staticData": null,
+  "meta": {
+    "templateId": "n8n-nodes-base.scheduleTrigger",
+    "templateCredsSetupCompleted": false,
+    "instanceSettings": {
+      "isMultiMain": false
+    }
+  },
+  "id": "winowin-recordatorio-24h",
+  "createdAt": "2026-06-19T00:00:00.000Z",
+  "updatedAt": "2026-06-19T00:00:00.000Z",
+  "description": "Cada hora consulta al chatbot las citas de mañana sin recordatorio, envía un WhatsApp al cliente y marca la cita como recordada. Usa los endpoints GET /api/appointments/pending-reminders y POST /api/appointments/{id}/mark-reminded"
+}

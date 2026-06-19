@@ -1,4 +1,4 @@
-# 🛠️ Guía de Despliegue Técnico — WinoWin Recepcionista
+   # 🛠️ Guía de Despliegue Técnico — WinoWin Recepcionista
 
 > **Para:** La persona que instala el chatbot en el servidor del cliente.  
 > **Requisitos previos:** Conocimientos básicos de Linux, Python, y redes.
@@ -36,7 +36,7 @@ sudo apt install -y git
 
 ```bash
 # Clonar el repositorio
-git clone <URL_DEL_REPO> /opt/chatbot-recepcionista
+git clone <https://github.com/Noxiffow/chatbot-recepcionista> /opt/chatbot-recepcionista
 cd /opt/chatbot-recepcionista
 
 # Crear entorno virtual

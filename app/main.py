@@ -22,6 +22,7 @@ from app.database import (
     generate_slots, get_availability, get_available_slots,
     get_available_dates, book_appointment, cancel_appointment,
     get_appointments_for_date,
+    get_appointments_pending_reminders, mark_appointment_reminded,
 )
 from app.webhook_handler import parse_webhook_body, process_message
 from app.whatsapp_client import check_health
@@ -524,3 +525,47 @@ async def api_generate_slots(days: int = 30):
     db_conn = await get_db()
     count = await generate_slots(db_conn, days)
     return {"success": True, "slots_created": count, "days": days}
+
+
+# ── n8n Workflows API: Endpoints for n8n workflows ──────────
+
+@app.get("/api/appointments/pending-reminders")
+async def api_pending_reminders():
+    """Get tomorrow's appointments that haven't been reminded yet.
+
+    Used by n8n workflow: WinoWin - Recordatorio 24h
+
+    Returns list of: {id, phone (client_phone), name (client_name),
+                      service (service_name), date, time (start_time)}
+    """
+    db_conn = await get_db()
+    appointments = await get_appointments_pending_reminders(db_conn)
+
+    # Map to the format expected by n8n workflows
+    result = []
+    for a in appointments:
+        result.append({
+            "id": a["id"],
+            "phone": a["client_phone"],
+            "name": a["client_name"],
+            "service": a["service_name"],
+            "date": a["date"],
+            "time": a["start_time"],
+        })
+
+    return {
+        "appointments": result,
+        "count": len(result),
+    }
+
+
+@app.post("/api/appointments/{appointment_id}/mark-reminded")
+async def api_mark_reminded(appointment_id: int):
+    """Mark an appointment as reminded.
+
+    Used by n8n workflow: WinoWin - Recordatorio 24h
+    Called after sending the reminder WhatsApp message.
+    """
+    db_conn = await get_db()
+    ok = await mark_appointment_reminded(db_conn, appointment_id)
+    return {"success": ok, "appointment_id": appointment_id}

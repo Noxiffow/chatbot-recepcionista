@@ -117,6 +117,9 @@ async def init_db() -> aiosqlite.Connection:
     # Fase 7: Run migrations for new columns
     await _migrate_conversations_table(db)
 
+    # n8n Workflows: Add reminded_at column
+    await migrate_appointments_reminded(db)
+
     logger.info(f"✅ Database initialized at {config.database_path}")
     return db
 
@@ -969,3 +972,104 @@ async def get_pending_notifications(
     )
     rows = await cursor.fetchall()
     return [dict(row) for row in rows]
+
+
+# ────────────────────────────────────────────────────────────────
+# n8n Workflows API: Endpoints para los workflows de n8n
+# ────────────────────────────────────────────────────────────────
+
+async def migrate_appointments_reminded(db: aiosqlite.Connection) -> None:
+    """Add reminded_at column to appointments if not exists."""
+    try:
+        await db.execute(
+            "ALTER TABLE appointments ADD COLUMN reminded_at TEXT"
+        )
+        await db.commit()
+        logger.info("📦 Migration: added appointments.reminded_at column")
+    except Exception:
+        pass  # Column already exists
+
+
+async def get_appointments_pending_reminders(
+    db: aiosqlite.Connection,
+) -> list[dict]:
+    """Get appointments for tomorrow that haven't been reminded yet.
+
+    Used by n8n workflow: WinoWin - Recordatorio 24h
+
+    Returns appointments with: id, client_name, client_phone,
+    service_name, date, start_time.
+    """
+    from datetime import date as dt_date, timedelta
+
+    tomorrow = (dt_date.today() + timedelta(days=1)).isoformat()
+
+    cursor = await db.execute(
+        """
+        SELECT a.id, a.client_name, a.client_phone,
+               a.date, a.start_time, a.end_time,
+               s.name as service_name, s.duration_min
+        FROM appointments a
+        JOIN services s ON a.service_id = s.id
+        WHERE a.status = 'booked'
+          AND a.date = ?
+          AND a.reminded_at IS NULL
+        ORDER BY a.start_time
+        """,
+        (tomorrow,),
+    )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def mark_appointment_reminded(
+    db: aiosqlite.Connection,
+    appointment_id: int,
+) -> bool:
+    """Mark an appointment as reminded (sets reminded_at timestamp).
+
+    Also creates a notification record of type 'reminder' with status 'sent'.
+
+    Used by n8n workflow: WinoWin - Recordatorio 24h
+
+    Returns True on success, False if appointment not found.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Check appointment exists
+    cursor = await db.execute(
+        "SELECT id FROM appointments WHERE id = ?", (appointment_id,)
+    )
+    if not await cursor.fetchone():
+        logger.warning(f"⚠️ Appointment #{appointment_id} not found for mark_reminded")
+        return False
+
+    # Update reminded_at
+    await db.execute(
+        "UPDATE appointments SET reminded_at = ? WHERE id = ?",
+        (now, appointment_id),
+    )
+
+    # Also add a notification record (if not exists for this appointment + reminder type)
+    cursor = await db.execute(
+        "SELECT id FROM notifications WHERE appointment_id = ? AND type = 'reminder'",
+        (appointment_id,),
+    )
+    existing = await cursor.fetchone()
+    if existing:
+        await db.execute(
+            "UPDATE notifications SET status = 'sent', sent_at = ? WHERE id = ?",
+            (now, existing["id"]),
+        )
+    else:
+        await db.execute(
+            """
+            INSERT INTO notifications (appointment_id, type, scheduled_for, sent_at, status, created_at)
+            VALUES (?, 'reminder', ?, ?, 'sent', ?)
+            """,
+            (appointment_id, now, now, now),
+        )
+
+    await db.commit()
+    logger.info(f"✅ Appointment #{appointment_id} marked as reminded")
+    return True
