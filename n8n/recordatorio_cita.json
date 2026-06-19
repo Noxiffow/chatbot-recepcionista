@@ -1,0 +1,157 @@
+{
+  "name": "WinoWin — Recordatorio de Cita 24h antes",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Cada 30 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id, a.client_name, a.client_phone, a.start_time, s.name as service_name\nFROM appointments a\nJOIN services s ON a.service_id = s.id\nWHERE a.status = 'booked'\n  AND a.date = date('now', '+1 day')\n  AND a.id NOT IN (\n    SELECT appointment_id FROM notifications WHERE type = 'reminder'\n  )\nORDER BY a.start_time",
+        "options": {}
+      },
+      "id": "query-appointments",
+      "name": "Consultar citas para mañana",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Construir mensaje de recordatorio para WhatsApp\nconst items = [];\n\nfor (const item of $input.all()) {\n  const name = item.json.client_name || 'cliente';\n  const time = item.json.start_time;\n  const service = (item.json.service_name || 'servicio').toLowerCase();\n  \n  const message = `¡Hola ${name}! 👋 Te recordamos que mañana a las ${time} tienes tu ${service}. ¡Te esperamos! 💇‍♀️✨`;\n  \n  items.push({\n    json: {\n      appointment_id: item.json.id,\n      client_phone: item.json.client_phone,\n      client_name: item.json.client_name,\n      message: message,\n      notification_type: 'reminder'\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "build-message",
+      "name": "Construir mensaje recordatorio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v22.0/{{$env.PHONE_NUMBER_ID}}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.WHATSAPP_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.client_phone }}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"preview_url\": false,\n    \"body\": \"{{ $json.message }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "send-whatsapp",
+      "name": "Enviar por WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO notifications (appointment_id, type, scheduled_for, sent_at, status, wa_message_id, created_at)\nVALUES ({{ $json.appointment_id }}, 'reminder', datetime('now'), datetime('now'), 'sent', '{{ $json.wa_message_id }}', datetime('now'))",
+        "options": {}
+      },
+      "id": "log-notification",
+      "name": "Registrar notificación enviada",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Cada 30 minutos": {
+      "main": [
+        [
+          {
+            "node": "Consultar citas para mañana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar citas para mañana": {
+      "main": [
+        [
+          {
+            "node": "Construir mensaje recordatorio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir mensaje recordatorio": {
+      "main": [
+        [
+          {
+            "node": "Enviar por WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar por WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Registrar notificación enviada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "active": false,
+  "settings": {
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "winowin",
+      "id": "1"
+    },
+    {
+      "name": "whatsapp",
+      "id": "2"
+    }
+  ],
+  "staticData": null,
+  "meta": {
+    "templateId": "n8n-nodes-base.webhook",
+    "templateCredsSetupCompleted": false,
+    "instanceSettings": {
+      "isMultiMain": false
+    }
+  },
+  "id": "recordatorio-cita-24h",
+  "createdAt": "2026-06-19T00:00:00.000Z",
+  "updatedAt": "2026-06-19T00:00:00.000Z",
+  "description": "Escanea citas que empiezan mañana y envía recordatorio 24h antes por WhatsApp. Documentación complementaria — el motor real es Python/APScheduler en app/scheduler.py"
+}

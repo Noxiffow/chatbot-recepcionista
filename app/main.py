@@ -25,6 +25,7 @@ from app.database import (
 )
 from app.webhook_handler import parse_webhook_body, process_message
 from app.whatsapp_client import check_health
+from app.scheduler import start_scheduler, stop_scheduler
 
 # ── Logging ─────────────────────────────────────────────────
 logging.basicConfig(
@@ -79,10 +80,23 @@ async def lifespan(app: FastAPI):
     can_send = waba_health.get("can_send_message", "unknown")
     logger.info(f"🏥 WABA Health: can_send_message={can_send}")
 
+    # Fase 6: Start APScheduler for reminders & follow-ups
+    try:
+        start_scheduler()
+        logger.info("⏰ Scheduler started for reminders & follow-ups")
+    except Exception as e:
+        logger.error(f"❌ Failed to start scheduler: {e}")
+
     yield  # App runs here
 
     # Shutdown
     logger.info("👋 WinoWin Recepcionista shutting down...")
+
+    # Fase 6: Stop scheduler
+    try:
+        stop_scheduler()
+    except Exception as e:
+        logger.error(f"❌ Error stopping scheduler: {e}")
     if db:
         await db.close()
         logger.info("   Database connection closed.")
@@ -91,8 +105,8 @@ async def lifespan(app: FastAPI):
 # ── FastAPI App ─────────────────────────────────────────────
 app = FastAPI(
     title="WinoWin Recepcionista",
-    description="Chatbot WhatsApp Business con IA (Groq + Llama 3) · Fase 5B",
-    version="0.3.0",
+    description="Chatbot WhatsApp Business con IA (Groq + Llama 3) · Fase 6",
+    version="0.4.0",
     lifespan=lifespan,
 )
 

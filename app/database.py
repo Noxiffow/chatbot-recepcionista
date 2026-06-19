@@ -77,6 +77,18 @@ CREATE TABLE IF NOT EXISTS appointments (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Fase 6: Notifications / Recordatorios
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    appointment_id INTEGER NOT NULL REFERENCES appointments(id),
+    type TEXT NOT NULL,                  -- 'reminder', 'followup'
+    scheduled_for TEXT NOT NULL,         -- ISO timestamp when notification should fire
+    sent_at TEXT,                        -- ISO timestamp when actually sent (NULL if pending)
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending, sent, failed
+    wa_message_id TEXT,                  -- WhatsApp message ID if sent
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_number);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(received_at);
 CREATE INDEX IF NOT EXISTS idx_messages_wa_id ON messages(wa_message_id);
@@ -87,6 +99,9 @@ CREATE INDEX IF NOT EXISTS idx_schedule_date ON schedule(date);
 CREATE INDEX IF NOT EXISTS idx_schedule_status ON schedule(status);
 CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(date);
 CREATE INDEX IF NOT EXISTS idx_appointments_phone ON appointments(client_phone);
+CREATE INDEX IF NOT EXISTS idx_notifications_appointment ON notifications(appointment_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
+CREATE INDEX IF NOT EXISTS idx_notifications_scheduled ON notifications(scheduled_for);
 """
 
 
@@ -637,6 +652,18 @@ async def book_appointment(
         f"on {date_str} {start_time}-{end_time}"
     )
 
+    # Fase 6: Schedule reminder + followup notifications
+    try:
+        notif_result = await schedule_notifications_for_appointment(
+            db, appointment_id, date_str, start_time, end_time
+        )
+        logger.info(
+            f"🔔 Notifications scheduled: reminder_id={notif_result.get('reminder_id')}, "
+            f"followup_id={notif_result.get('followup_id')}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Failed to schedule notifications for appointment #{appointment_id}: {e}")
+
     return {
         "id": appointment_id,
         "service_id": service_id,
@@ -739,3 +766,206 @@ async def get_available_dates(
             break
 
     return results
+
+
+# ────────────────────────────────────────────────────────────────
+# Fase 6: Notifications & Scheduling
+# ────────────────────────────────────────────────────────────────
+
+async def get_appointments_for_reminder(
+    db: aiosqlite.Connection,
+    hours_before: int = 24,
+) -> list[dict]:
+    """Find appointments that start in ~24 hours and need a reminder.
+    Returns appointments with service info that don't yet have a reminder notification.
+    """
+    from datetime import datetime as dt_datetime, timezone as dt_timezone
+
+    now = dt_datetime.now(dt_timezone.utc)
+    target = now + timedelta(hours=hours_before)
+    target_date = target.strftime("%Y-%m-%d")
+    target_hour = target.strftime("%H:%M")
+
+    # Find appointments starting within a window around target time
+    cursor = await db.execute(
+        """
+        SELECT a.id, a.service_id, a.client_name, a.client_phone,
+               a.date, a.start_time, a.end_time, s.name as service_name,
+               s.duration_min
+        FROM appointments a
+        JOIN services s ON a.service_id = s.id
+        WHERE a.status = 'booked'
+          AND a.date = ?
+          AND a.start_time >= ?
+          AND a.start_time <= ?
+          AND a.id NOT IN (
+              SELECT appointment_id FROM notifications
+              WHERE type = 'reminder'
+          )
+        ORDER BY a.date, a.start_time
+        """,
+        (target_date, target_hour, _minutes_to_time(_time_to_minutes(target_hour) + 60)),
+    )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def get_appointments_for_followup(
+    db: aiosqlite.Connection,
+    hours_after: int = 2,
+) -> list[dict]:
+    """Find appointments that ended ~2 hours ago and need a follow-up.
+    Returns appointments with service info that don't yet have a followup notification.
+    """
+    from datetime import datetime as dt_datetime, timezone as dt_timezone
+
+    now = dt_datetime.now(dt_timezone.utc)
+    target = now - timedelta(hours=hours_after)
+    target_date = target.strftime("%Y-%m-%d")
+    target_hour = target.strftime("%H:%M")
+
+    # Find appointments ending within a window around target time
+    cursor = await db.execute(
+        """
+        SELECT a.id, a.service_id, a.client_name, a.client_phone,
+               a.date, a.start_time, a.end_time, s.name as service_name,
+               s.duration_min
+        FROM appointments a
+        JOIN services s ON a.service_id = s.id
+        WHERE a.status = 'booked'
+          AND a.date = ?
+          AND a.end_time >= ?
+          AND a.end_time <= ?
+          AND a.id NOT IN (
+              SELECT appointment_id FROM notifications
+              WHERE type = 'followup'
+          )
+        ORDER BY a.date, a.start_time
+        """,
+        (target_date, target_hour, _minutes_to_time(_time_to_minutes(target_hour) + 60)),
+    )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def create_notification(
+    db: aiosqlite.Connection,
+    appointment_id: int,
+    notif_type: str,     # 'reminder' or 'followup'
+    scheduled_for: str,  # ISO timestamp
+) -> int:
+    """Create a scheduled notification record. Returns the row id."""
+    cursor = await db.execute(
+        """
+        INSERT INTO notifications (appointment_id, type, scheduled_for, status, created_at)
+        VALUES (?, ?, ?, 'pending', datetime('now'))
+        """,
+        (appointment_id, notif_type, scheduled_for),
+    )
+    await db.commit()
+    return cursor.lastrowid
+
+
+async def mark_notification_sent(
+    db: aiosqlite.Connection,
+    notification_id: int,
+    wa_message_id: str = "",
+    success: bool = True,
+) -> None:
+    """Mark a notification as sent or failed."""
+    status = "sent" if success else "failed"
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        """
+        UPDATE notifications
+        SET status = ?, sent_at = ?, wa_message_id = ?
+        WHERE id = ?
+        """,
+        (status, now, wa_message_id, notification_id),
+    )
+    await db.commit()
+
+
+async def schedule_notifications_for_appointment(
+    db: aiosqlite.Connection,
+    appointment_id: int,
+    appointment_date: str,   # YYYY-MM-DD
+    start_time: str,         # HH:MM
+    end_time: str,           # HH:MM
+) -> dict:
+    """Schedule reminder and followup notifications for a newly created appointment.
+
+    Returns dict with reminder_id and followup_id.
+    """
+    from datetime import datetime as dt_datetime, timezone as dt_timezone
+
+    result = {"reminder_id": None, "followup_id": None}
+
+    # Scheduled reminder: ~24h before the appointment
+    # Parse appointment date + start_time as UTC
+    appt_start_str = f"{appointment_date}T{start_time}:00+00:00"
+    try:
+        appt_start = dt_datetime.fromisoformat(appt_start_str)
+    except (ValueError, TypeError):
+        logger.error(f"❌ Cannot parse appointment time: {appt_start_str}")
+        return result
+
+    reminder_time = appt_start - timedelta(hours=24)
+    if reminder_time > dt_datetime.now(dt_timezone.utc):
+        result["reminder_id"] = await create_notification(
+            db, appointment_id, "reminder", reminder_time.isoformat()
+        )
+        logger.info(
+            f"🔔 Reminder scheduled for appointment #{appointment_id} "
+            f"at {reminder_time.isoformat()}"
+        )
+    else:
+        logger.info(
+            f"⏭️ Skipping reminder for appointment #{appointment_id} "
+            f"(starts within 24h: {appt_start_str})"
+        )
+
+    # Scheduled followup: ~2h after the appointment ends
+    appt_end_str = f"{appointment_date}T{end_time}:00+00:00"
+    try:
+        appt_end = dt_datetime.fromisoformat(appt_end_str)
+    except (ValueError, TypeError):
+        logger.error(f"❌ Cannot parse appointment end time: {appt_end_str}")
+        return result
+
+    followup_time = appt_end + timedelta(hours=2)
+    result["followup_id"] = await create_notification(
+        db, appointment_id, "followup", followup_time.isoformat()
+    )
+    logger.info(
+        f"📝 Followup scheduled for appointment #{appointment_id} "
+        f"at {followup_time.isoformat()}"
+    )
+
+    return result
+
+
+async def get_pending_notifications(
+    db: aiosqlite.Connection,
+) -> list[dict]:
+    """Get all pending notifications that are due (scheduled_for <= now)."""
+    from datetime import datetime as dt_datetime, timezone as dt_timezone
+
+    now = dt_datetime.now(dt_timezone.utc).isoformat()
+    cursor = await db.execute(
+        """
+        SELECT n.id, n.appointment_id, n.type, n.scheduled_for,
+               a.client_name, a.client_phone, a.date, a.start_time, a.end_time,
+               s.name as service_name
+        FROM notifications n
+        JOIN appointments a ON n.appointment_id = a.id
+        JOIN services s ON a.service_id = s.id
+        WHERE n.status = 'pending'
+          AND n.scheduled_for <= ?
+        ORDER BY n.scheduled_for ASC
+        LIMIT 50
+        """,
+        (now,),
+    )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
